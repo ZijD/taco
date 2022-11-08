@@ -1,3 +1,3 @@
-export TACO_INCLUDE_DIR=/work/shared/users/ugrad/zd226/tmp/taco/include
-export TACO_LIBRARY_DIR=/work/shared/users/ugrad/zd226/tmp/taco/build/lib
-export TACO_CONVERT_GEN_DIR=/work/shared/users/ugrad/zd226/tmp/taco/build
+export TACO_INCLUDE_DIR=$(pwd)/../../include
+export TACO_LIBRARY_DIR=$(pwd)/../../build/lib
+export TACO_CONVERT_GEN_DIR=$(pwd)/../../build
