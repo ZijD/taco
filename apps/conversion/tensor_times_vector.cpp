@@ -7,10 +7,11 @@
 using namespace taco;
 
 #define TI (double)clock()/CLOCKS_PER_SEC
+#define TACO_MAX(_a,_b) ((_a) > (_b) ? (_a) : (_b))
 
 Format coo({compressed(ModeFormat::Property::NOT_UNIQUE), Singleton(ModeFormat::Property::UNIQUE)});
 Format csr({Dense, Sparse(ModeFormat::Property::UNIQUE)});
-// Format dcsr({Sparse(ModeFormat::Property::UNIQUE),Sparse(ModeFormat::Property::UNIQUE)});
+Format dcsr({Sparse(ModeFormat::Property::UNIQUE),Sparse(ModeFormat::Property::UNIQUE)});
 Format csc({Dense, Sparse(ModeFormat::Property::UNIQUE)}, {1,0});
 // Format dcsc({Sparse, Sparse}, {1,0});
 
@@ -360,10 +361,73 @@ int evaluate_csc_dia(taco_tensor_t *A, taco_tensor_t *B) {
   return 0;
 }
 
+int evaluate_dcsr_ellpack(taco_tensor_t *A, taco_tensor_t *B) {
+  int A2_dimension = (int)(A->dimensions[1]);
+  int* A1_ub = (int*)(A->indices[0][0]);
+  int* A3_crd = (int*)(A->indices[2][1]);
+  double* A_vals = (double*)(A->vals);
+  int* B1_pos = (int*)(B->indices[0][0]);
+  int* B1_crd = (int*)(B->indices[0][1]);
+  int* B2_pos = (int*)(B->indices[1][0]);
+  int* B2_crd = (int*)(B->indices[1][1]);
+  double* B_vals = (double*)(B->vals);
+
+  int32_t A1_attr_max_coord = 0;
+
+  for (int32_t pB1 = B1_pos[0]; pB1 < B1_pos[1]; pB1++) {
+    A1_attr_max_coord = TACO_MAX(A1_attr_max_coord, (int32_t)(B2_pos[(pB1 + 1)] - B2_pos[pB1]));
+  }
+  A1_ub = (int32_t*)malloc(sizeof(int32_t) * 1);
+  A1_ub[0] = A1_attr_max_coord;
+  A3_crd = (int32_t*)calloc(A1_ub[0] * A2_dimension, sizeof(int32_t));
+  int32_t A_capacity = A1_ub[0] * A2_dimension;
+  A_vals = (double*)calloc(A_capacity, sizeof(double));
+  for (int32_t pB10 = B1_pos[0]; pB10 < B1_pos[1]; pB10++) {
+    int32_t i = B1_crd[pB10];
+    int32_t count150 = 0;
+    for (int32_t pB2 = B2_pos[pB10]; pB2 < B2_pos[(pB10 + 1)]; pB2++) {
+      int32_t j = B2_crd[pB2];
+      int32_t pA2 = count150 * A2_dimension + i;
+      A3_crd[pA2] = j;
+      A_vals[pA2] = B_vals[pB2];
+      count150++;
+    }
+  }
+
+  A->indices[0][0] = (uint8_t*)(A1_ub);
+  A->indices[2][1] = (uint8_t*)(A3_crd);
+  A->vals = (uint8_t*)A_vals;
+  return 0;
+}
+
+
 int a[(const int)5e7] = {0};
 
 void clear_cache() {
   memset(a, 1, sizeof(a));
+}
+
+float test_dcsr_ell(char* file_name) {
+  Tensor<double> I = taco::read(file_name, dcsr);
+  taco_tensor_t* B = I.getTacoTensorT();
+  std::cerr << B->dimensions[0] << ' ' << B->dimensions[1] << std::endl;
+  // only need B->dimensions[0] in the kernel (row dimension).
+  std::vector<int> bufferDim = {1, B->dimensions[0], B->dimensions[1]};
+  std::vector<int> bufferModeOrdering = {0, 1, 2}; //should not matter
+  std::vector<taco_mode_t> bufferModeType = {taco_mode_dense, taco_mode_sparse, taco_mode_sparse}; // just get enough "A->indices"
+  taco_tensor_t* A = init_taco_tensor_t(3, 8, bufferDim.data(), bufferModeOrdering.data(), bufferModeType.data(), nullptr);
+  float acc_time = 0;
+  for (int i = 0; i < 50; ++i) {
+    clear_cache();
+    auto tic = TI;
+    if (!evaluate_dcsr_ellpack(A, B)) {
+      auto toc = TI;
+      acc_time += toc-tic;
+      deinit_taco_tensor_t(A);
+      A = init_taco_tensor_t(3, 8, bufferDim.data(), bufferModeOrdering.data(), bufferModeType.data(), nullptr);
+    }
+  }
+  return acc_time;
 }
 
 float test_csr_dia(char* file_name) {
@@ -520,6 +584,8 @@ int main(int argc, char* argv[]) {
     acc_time = test_csc_dia(argv[1]);
   } else if (test_case == 5) {
     acc_time = test_csr_unsorted_dia(argv[1]);
+  } else if (test_case == 6) {
+    acc_time = test_dcsr_ell(argv[1]);
   }
   std::cerr << "average among 50 runs = " << ((float)acc_time*20.0) << "(ms)" << std::endl;
   return 0;
